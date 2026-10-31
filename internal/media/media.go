@@ -25,6 +25,20 @@ var ErrNotFound = errors.New("not found")
 // MaxStderr bounds the captured stderr of each subprocess.
 const MaxStderr = 16 * 1024
 
+// Stdout limits. ffprobe JSON for a normal file is tens of KiB; files with
+// thousands of chapters or tags stay within a few MiB. 8 MiB per process is
+// far above that and, with the default 4 media workers, bounds the worst
+// case at 32 MiB, which a 512 MB NAS can afford. Frames and audio windows
+// have an exact expected size and are capped at it.
+const (
+	MaxProbeOutput   = 8 << 20
+	MaxVersionOutput = 64 << 10
+)
+
+// ErrOutputTooLarge means a process wrote more than its stdout limit; the
+// output is discarded, never parsed in part.
+var ErrOutputTooLarge = errors.New("output exceeds its size limit")
+
 // DefaultTimeout bounds each subprocess invocation.
 const DefaultTimeout = 60 * time.Second
 
@@ -88,10 +102,10 @@ func resolve(explicit, name string) (string, error) {
 var versionRE = regexp.MustCompile(`(?m)^ff(?:mpeg|probe) version (\S+)`)
 
 func readVersion(ctx context.Context, bin string) (string, error) {
-	out, _, err := run(ctx, 10*time.Second, bin, "-hide_banner", "-version")
+	out, _, err := run(ctx, 10*time.Second, MaxVersionOutput, bin, "-hide_banner", "-version")
 	if err != nil {
 		// -hide_banner makes some builds omit the first line; retry without.
-		out, _, err = run(ctx, 10*time.Second, bin, "-version")
+		out, _, err = run(ctx, 10*time.Second, MaxVersionOutput, bin, "-version")
 		if err != nil {
 			return "", err
 		}
@@ -99,7 +113,7 @@ func readVersion(ctx context.Context, bin string) (string, error) {
 	if m := versionRE.FindSubmatch(out); m != nil {
 		return string(m[1]), nil
 	}
-	out, _, err = run(ctx, 10*time.Second, bin, "-version")
+	out, _, err = run(ctx, 10*time.Second, MaxVersionOutput, bin, "-version")
 	if err != nil {
 		return "", err
 	}
@@ -153,20 +167,39 @@ func (b *boundedBuffer) String() string {
 }
 
 // run executes bin with args, capturing stdout fully and stderr bounded.
-func run(ctx context.Context, timeout time.Duration, bin string, args ...string) ([]byte, string, error) {
+// limitedBuffer keeps at most max bytes and fails the write beyond that,
+// which stops the copy from the process and lets run kill it.
+type limitedBuffer struct {
+	buf      bytes.Buffer
+	max      int
+	overflow bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		b.overflow = true
+		return 0, ErrOutputTooLarge
+	}
+	return b.buf.Write(p)
+}
+
+func run(ctx context.Context, timeout time.Duration, maxOut int, bin string, args ...string) ([]byte, string, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, bin, args...)
-	var stdout bytes.Buffer
+	stdout := &limitedBuffer{max: maxOut}
 	stderr := &boundedBuffer{max: MaxStderr}
-	cmd.Stdout = &stdout
+	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Stdin = nil
 	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
+	if stdout.overflow {
+		return nil, stderr.String(), fmt.Errorf("%s: %w (%d bytes)", filepath.Base(bin), ErrOutputTooLarge, maxOut)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, stderr.String(), ctx.Err()
@@ -178,9 +211,9 @@ func run(ctx context.Context, timeout time.Duration, bin string, args ...string)
 		if msg == "" {
 			msg = err.Error()
 		}
-		return stdout.Bytes(), msg, fmt.Errorf("%s failed: %s", filepath.Base(bin), firstLine(msg))
+		return stdout.buf.Bytes(), msg, fmt.Errorf("%s failed: %s", filepath.Base(bin), firstLine(msg))
 	}
-	return stdout.Bytes(), stderr.String(), nil
+	return stdout.buf.Bytes(), stderr.String(), nil
 }
 
 func firstLine(s string) string {

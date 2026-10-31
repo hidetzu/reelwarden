@@ -20,7 +20,7 @@ func (t *Tools) Probe(ctx context.Context, path string) (*model.MediaInfo, error
 	if err != nil {
 		return nil, err
 	}
-	out, stderr, err := run(ctx, t.Timeout, t.FFprobePath,
+	out, stderr, err := run(ctx, t.Timeout, MaxProbeOutput, t.FFprobePath,
 		"-hide_banner", "-v", "error",
 		"-protocol_whitelist", "file",
 		"-print_format", "json",

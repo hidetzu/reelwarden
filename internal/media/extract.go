@@ -13,7 +13,7 @@ func (t *Tools) ExtractRGB(ctx context.Context, path string, atSec float64, stre
 	if err != nil {
 		return nil, err
 	}
-	out, _, err := run(ctx, t.Timeout, t.FFmpegPath,
+	out, _, err := run(ctx, t.Timeout, w*h*3, t.FFmpegPath,
 		"-hide_banner", "-nostdin", "-loglevel", "error",
 		"-protocol_whitelist", "file,pipe",
 		"-ss", strconv.FormatFloat(atSec, 'f', 3, 64),
