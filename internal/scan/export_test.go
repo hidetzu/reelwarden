@@ -2,6 +2,7 @@ package scan
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/hidetzu/reelwarden/internal/filesystem"
 )
@@ -31,4 +32,18 @@ func SetMountTable(m map[string][]string) (restore func()) {
 	old := mountTable
 	mountTable = func() map[string][]string { return m }
 	return func() { mountTable = old }
+}
+
+// RealTempDir returns t.TempDir() with links resolved. Tests that fake
+// identities or mount tables by path must use the spelling the walker sees
+// (/private/var on macOS, long names instead of 8.3 short names on Windows).
+func RealTempDir(t interface {
+	TempDir() string
+	Fatal(...any)
+}) string {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

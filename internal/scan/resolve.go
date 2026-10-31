@@ -68,6 +68,11 @@ func resolveFrom(dir, target string) (string, error) {
 		cur, more = splitLink(cur, link)
 		rest = append(more, rest...)
 	}
+	// Spell the result like the roots (filepath.EvalSymlinks): on Windows
+	// this expands 8.3 short names, so paths compare equal.
+	if canon, err := filepath.EvalSymlinks(cur); err == nil {
+		cur = canon
+	}
 	return cur, nil
 }
 

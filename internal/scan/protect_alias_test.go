@@ -16,7 +16,7 @@ import (
 // another path. The alias sorts first, so the protected path itself is
 // skipped as a directory cycle; protection must still follow the file.
 func TestProtectionFollowsIdentityThroughAliases(t *testing.T) {
-	dir := t.TempDir()
+	dir := scan.RealTempDir(t)
 	alias := filepath.Join(dir, "a_mirror")
 	sub := filepath.Join(dir, "z_keep", "sub")
 	for _, p := range []string{filepath.Join(alias, "x.mp4"), filepath.Join(sub, "x.mp4"), filepath.Join(dir, "z_keep", "other.mp4")} {
@@ -68,7 +68,7 @@ func TestProtectionFollowsIdentityThroughAliases(t *testing.T) {
 // file through another spelling of its path (the root bind-mounted
 // elsewhere, another letter case). The reference must follow identity.
 func TestLinkThroughOutsideAliasKeepsReference(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	root := filepath.Join(base, "R")
 	inRoot := filepath.Join(root, "e", "target.mp4")
 	alias := filepath.Join(base, "alias", "e", "target.mp4") // what the bind mount would show
@@ -118,7 +118,7 @@ func TestLinkThroughOutsideAliasKeepsReference(t *testing.T) {
 // A recycle bin bind-mounted under an innocent name (Docker:
 // -v .../#recycle:/data/deleted) is recognised by its mount source.
 func TestBindMountedBinIsRecognised(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	write := func(p string) {
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte("same"), 0o644)
@@ -138,7 +138,7 @@ func TestBindMountedBinIsRecognised(t *testing.T) {
 
 // A single file bind-mounted from a bin is neither scanned nor protecting.
 func TestFileBindMountedFromBin(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	lib := filepath.Join(base, "lib")
 	p := filepath.Join(lib, "a.mp4")
 	os.MkdirAll(lib, 0o755)
@@ -157,7 +157,7 @@ func TestFileBindMountedFromBin(t *testing.T) {
 // Through a followed link the walk path hides that a folder is a bind mount
 // of a bin; files are judged at their real path.
 func TestFollowedLinkIntoBinMountIsNotProtected(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	real := filepath.Join(base, "scan", "real")
 	k := filepath.Join(real, "bin", "K.mp4")
 	os.MkdirAll(filepath.Dir(k), 0o755)
@@ -182,7 +182,7 @@ func TestFollowedLinkIntoBinMountIsNotProtected(t *testing.T) {
 
 // Nested or aliased protect roots all count as used.
 func TestNestedProtectRootsAllMatch(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	lib := filepath.Join(base, "Lib")
 	os.MkdirAll(filepath.Join(lib, "Sub"), 0o755)
 	os.WriteFile(filepath.Join(lib, "Sub", "b.mp4"), []byte("b"), 0o644)
@@ -198,7 +198,7 @@ func TestNestedProtectRootsAllMatch(t *testing.T) {
 // A hard link in @eaDir or a hidden folder of the library does not make an
 // outside file protected; those folders are often deleted wholesale.
 func TestMetadataFolderLinkDoesNotProtect(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	old := filepath.Join(base, "Old", "c.mp4")
 	os.MkdirAll(filepath.Dir(old), 0o755)
 	os.WriteFile(old, []byte("c"), 0o644)
@@ -266,7 +266,7 @@ func TestOnlyScannedLibraryFilesAreTrustedKeepers(t *testing.T) {
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
-			r := t.TempDir()
+			r := scan.RealTempDir(t)
 			opts := setup(r)
 			mk(filepath.Join(r, "dup", "a.mp4"), "a")
 			opts.Roots = []string{r}
@@ -286,7 +286,7 @@ func TestOnlyScannedLibraryFilesAreTrustedKeepers(t *testing.T) {
 // A directory link inside the library shields what it shows, so the file
 // behind it is never proposed against another library copy.
 func TestShieldFollowsDirectoryLinksInLibrary(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	os.MkdirAll(filepath.Join(base, "p"), 0o755)
 	os.MkdirAll(filepath.Join(base, "old", "movies"), 0o755)
 	os.WriteFile(filepath.Join(base, "p", "x.mp4"), []byte("v"), 0o644)
@@ -308,7 +308,7 @@ func TestShieldFollowsDirectoryLinksInLibrary(t *testing.T) {
 // Hidden, metadata or excluded folders do not become trusted library
 // folders when bind-mounted into it or scanned as an explicit root.
 func TestTrustNeedsCleanLibraryPath(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	mk := func(p string) {
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte("a"), 0o644)
@@ -368,7 +368,7 @@ func TestTrustRejectsMountTricks(t *testing.T) {
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
-			base := t.TempDir()
+			base := scan.RealTempDir(t)
 			mk(filepath.Join(base, "Lib", "sub", "a.mp4"))
 			mk(filepath.Join(base, "Lib", "own.mp4"))
 			table, excl := setup(base)
@@ -393,7 +393,7 @@ func TestTrustRejectsMountTricks(t *testing.T) {
 // The shield does not wander outside the scan: a library link to /etc
 // must not turn into unreadable-folder failures.
 func TestShieldStaysInScope(t *testing.T) {
-	base := t.TempDir()
+	base := scan.RealTempDir(t)
 	lib := filepath.Join(base, "lib")
 	os.MkdirAll(lib, 0o755)
 	os.WriteFile(filepath.Join(lib, "a.mp4"), []byte("a"), 0o644)

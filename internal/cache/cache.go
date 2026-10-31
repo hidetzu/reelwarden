@@ -13,6 +13,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 
 	"github.com/hidetzu/reelwarden/internal/filesystem"
 )
@@ -70,7 +71,7 @@ type Store interface {
 
 // Open opens (or creates) the cache database under dir.
 func Open(dir string) (Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	path := filepath.Join(dir, "cache.db")
@@ -105,7 +106,7 @@ func openBolt(path string) (s Store, err error) {
 	}()
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})
 	if err != nil {
-		if errors.Is(err, bolt.ErrTimeout) {
+		if errors.Is(err, berrors.ErrTimeout) {
 			return nil, fmt.Errorf("cache %s is locked by another reelwarden process (use --cache-dir or --no-cache)", path)
 		}
 		return nil, fmt.Errorf("open cache %s: %w (delete it, or use --cache-dir or --no-cache)", path, err)

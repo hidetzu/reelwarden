@@ -334,15 +334,6 @@ func (w *walker) insideRoots(resolved string) (rootInfo, bool) {
 	return rootInfo{}, false
 }
 
-func (w *walker) isProtected(resolved string) (string, bool) {
-	for i, p := range w.protect {
-		if isUnder(resolved, p) {
-			return w.inv.ProtectedRoots[i], true
-		}
-	}
-	return "", false
-}
-
 func (w *walker) warn(code, path, msg string) {
 	w.inv.Warnings = append(w.inv.Warnings, model.Warning{Code: code, Path: path, Message: msg})
 }

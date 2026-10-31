@@ -73,7 +73,7 @@ func selfTest(ctx context.Context, t *media.Tools) error {
 	gen := exec.CommandContext(ctx, t.FFmpegPath, "-hide_banner", "-nostdin", "-loglevel", "error",
 		"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=2", "-c:v", "mpeg4", "-y", clip)
 	if b, err := gen.CombinedOutput(); err != nil {
-		return fmt.Errorf("generate test clip (lavfi + mpeg4 encoder): %v %s", err, string(b))
+		return fmt.Errorf("generate test clip (lavfi + mpeg4 encoder): %w: %s", err, string(b))
 	}
 	mi, err := t.Probe(ctx, clip)
 	if err != nil {
