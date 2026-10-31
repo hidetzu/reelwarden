@@ -317,8 +317,8 @@ func decideAgainstKeeper(ix *model.Index, vrep map[string]string, k, m *member, 
 			ge.ReviewReasons = appendUnique(ge.ReviewReasons, "frames_differ")
 			return
 		}
-		if k.f.Visual.Params.AlgorithmVersion < 3 || m.f.Visual.Params.AlgorithmVersion < 3 {
-			m.set(model.DecisionManualReview, "rescan_needed: fingerprints from an older version carry no colour information")
+		if k.f.Visual.Params.AlgorithmVersion < 4 || m.f.Visual.Params.AlgorithmVersion < 4 {
+			m.set(model.DecisionManualReview, "rescan_needed: fingerprints from an older version carry no colour or audio information")
 			ge.ReviewReasons = appendUnique(ge.ReviewReasons, "rescan_needed")
 			return
 		}
@@ -327,8 +327,25 @@ func decideAgainstKeeper(ix *model.Index, vrep map[string]string, k, m *member, 
 			ge.ReviewReasons = appendUnique(ge.ReviewReasons, "color_differs")
 			return
 		}
+		// Audio: the same picture can carry another soundtrack. With audio on
+		// both sides, its coarse description must have been compared at most
+		// samples and agree; otherwise nothing is proposed.
+		if k.prof.AudioStreams > 0 || m.prof.AudioStreams > 0 {
+			need := len(m.f.Visual.Frames) / 2
+			switch {
+			case e.Visual.AudioCompared < need || mp.MaxAudioDelta <= 0:
+				m.set(model.DecisionManualReview, fmt.Sprintf("audio_not_compared: audio was described at %d of %d samples; the soundtrack may differ", e.Visual.AudioCompared, len(m.f.Visual.Frames)))
+				ge.ReviewReasons = appendUnique(ge.ReviewReasons, "audio_not_compared")
+				return
+			case e.Visual.AudioDelta > mp.MaxAudioDelta:
+				m.set(model.DecisionManualReview, fmt.Sprintf("audio_content_differs: audio distance %.2f at %d samples; another soundtrack, mix or volume", e.Visual.AudioDelta, e.Visual.AudioCompared))
+				ge.ReviewReasons = appendUnique(ge.ReviewReasons, "audio_content_differs")
+				return
+			}
+			m.reasons = append(m.reasons, fmt.Sprintf("audio agrees coarsely at %d samples (loudness and zero-crossing rate, not an audio fingerprint)", e.Visual.AudioCompared))
+		}
 		if isStatic(k.f.Visual, mp.FrameHammingThreshold) || isStatic(m.f.Visual, mp.FrameHammingThreshold) {
-			m.set(model.DecisionManualReview, "static_video: sampled frames barely change; audio is not compared, so the recordings may differ")
+			m.set(model.DecisionManualReview, "static_video: sampled frames barely change; audio is only compared coarsely, so the recordings may differ")
 			ge.ReviewReasons = appendUnique(ge.ReviewReasons, "static_video")
 			return
 		}

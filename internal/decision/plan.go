@@ -102,7 +102,7 @@ func BuildPlan(res *model.ScanResult, ev *model.Evaluation, source string, tool 
 			}
 			if ge.Relation != model.RelationByteIdentical {
 				a.Warnings = append(a.Warnings, "content is visually similar, not identical; information may be lost")
-				a.Warnings = append(a.Warnings, "only sampled frames were compared: audio, text visible in a few frames and scenes between samples were not checked")
+				a.Warnings = append(a.Warnings, "only sampled frames and a coarse audio description were compared: the soundtrack is not fingerprinted, and text visible in a few frames or scenes between samples were not checked")
 			}
 			a.Warnings = append(a.Warnings, "irreversible if executed by an external tool; reelwarden v0.1 never executes it")
 			pg.Actions = append(pg.Actions, a)

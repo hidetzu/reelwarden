@@ -30,6 +30,11 @@ type Profile struct {
 	AudioStreams   int
 	AudioLanguages []string
 	AudioCodecs    []string
+	// AudioTracks describes each audio track in stream order as
+	// "codec/channels/layout/sample_rate"; AudioBitRates holds the bitrate
+	// of each (0 when unknown).
+	AudioTracks    []string
+	AudioBitRates  []int64
 	Subtitles      int
 	SubLanguages   []string
 	Chapters       int
@@ -87,6 +92,8 @@ func ProfileOf(f *model.PhysicalFile) Profile {
 		case "audio":
 			p.AudioLanguages = append(p.AudioLanguages, langOf(s.Language))
 			p.AudioCodecs = append(p.AudioCodecs, s.Codec)
+			p.AudioTracks = append(p.AudioTracks, fmt.Sprintf("%s/%dch/%s/%dHz", s.Codec, s.Channels, s.ChannelLayout, s.SampleRate))
+			p.AudioBitRates = append(p.AudioBitRates, s.BitRate)
 		case "subtitle":
 			p.SubLanguages = append(p.SubLanguages, langOf(s.Language))
 		}
@@ -166,6 +173,20 @@ func BlockingDifferences(a, b Profile) []Difference {
 		add("audio_track_count_differs", "%d vs %d audio tracks", a.AudioStreams, b.AudioStreams)
 	} else if strings.Join(a.AudioLanguages, ",") != strings.Join(b.AudioLanguages, ",") {
 		add("audio_languages_differ", "[%s] vs [%s]", strings.Join(a.AudioLanguages, ","), strings.Join(b.AudioLanguages, ","))
+	}
+	// Audio quality cannot be ranked from metadata: a different codec,
+	// channel count, layout, sample rate or bitrate means review.
+	if a.AudioStreams == b.AudioStreams && len(a.AudioTracks) == len(b.AudioTracks) {
+		for i := range a.AudioTracks {
+			if a.AudioTracks[i] != b.AudioTracks[i] {
+				add("audio_format_differs", "audio track %d: %s vs %s", i+1, a.AudioTracks[i], b.AudioTracks[i])
+				break
+			}
+			if ra, rb := a.AudioBitRates[i], b.AudioBitRates[i]; ra > 0 && rb > 0 && math.Abs(float64(ra-rb)) > 0.1*math.Max(float64(ra), float64(rb)) {
+				add("audio_bitrate_differs", "audio track %d: %d vs %d bit/s", i+1, ra, rb)
+				break
+			}
+		}
 	}
 	if a.Subtitles != b.Subtitles {
 		add("subtitle_track_count_differs", "%d vs %d subtitle tracks", a.Subtitles, b.Subtitles)

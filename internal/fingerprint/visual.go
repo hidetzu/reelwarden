@@ -14,7 +14,8 @@ import (
 // VisualAlgorithmVersion is bumped whenever frame processing changes.
 // v2: frames are read as RGB; luma feeds dHash and per-frame chroma is kept.
 // v3: chroma is also kept per cell of a 3x3 grid.
-const VisualAlgorithmVersion = 3
+// v4: a coarse audio description (loudness, zero-crossing rate) per sample.
+const VisualAlgorithmVersion = 4
 
 // DefaultVisualParams are the defaults recorded in docs/design.md §6.
 func DefaultVisualParams() model.VisualParams {
@@ -61,6 +62,7 @@ func ComputeVisual(ctx context.Context, ex media.FrameExtractor, path string, mi
 		return nil, ErrNoDuration
 	}
 	fp := &model.VisualFingerprint{Params: p, FFmpegVersion: ex.Version()}
+	audio := mi.PrimaryAudio()
 	var lastErr error
 	for i, ts := range SampleTimes(mi.DurationSec, p.Samples) {
 		if err := ctx.Err(); err != nil {
@@ -84,6 +86,15 @@ func ComputeVisual(ctx context.Context, ex media.FrameExtractor, path string, mi
 			fs.LowInfo = fs.StdDev < p.LowInfoStdDev || fs.Mean < p.LowInfoMean
 			if fs.LowInfo {
 				fp.LowInfoCount++
+			}
+		}
+		if audio != nil {
+			pcm, err := ex.ExtractAudio(ctx, path, ts, audio.Index)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err == nil && pcm != nil {
+				fs.Audio = describeAudio(pcm)
 			}
 		}
 		fp.Frames = append(fp.Frames, fs)
@@ -161,6 +172,33 @@ func lumaAndChroma(rgb []byte, w, h int, fs *model.FrameSample) []byte {
 		}
 	}
 	return px
+}
+
+// describeAudio reduces s16le mono samples to loudness (RMS, dBFS) and the
+// zero-crossing rate. Two copies of one soundtrack agree closely on both at
+// every sample; a different song, language or silence does not.
+func describeAudio(pcm []byte) *model.AudioSample {
+	n := len(pcm) / 2
+	if n == 0 {
+		return nil
+	}
+	var sum float64
+	cross := 0
+	prev := int16(0)
+	for i := 0; i < n; i++ {
+		v := int16(uint16(pcm[2*i]) | uint16(pcm[2*i+1])<<8)
+		sum += float64(v) * float64(v)
+		if i > 0 && (v >= 0) != (prev >= 0) {
+			cross++
+		}
+		prev = v
+	}
+	rms := math.Sqrt(sum / float64(n))
+	db := -90.0
+	if rms > 0 {
+		db = math.Max(-90, 20*math.Log10(rms/32768))
+	}
+	return &model.AudioSample{RMSdB: math.Round(db*100) / 100, ZCR: math.Round(float64(cross)/float64(n)*10000) / 10000}
 }
 
 func meanStd(px []byte) (float64, float64) {

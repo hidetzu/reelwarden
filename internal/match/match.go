@@ -26,6 +26,9 @@ func DefaultParams() model.MatchParams {
 		// Re-encodes of the synthetic set stay below 1.3; colour grading,
 		// hue shifts (12 degrees and up) and greyscale are above 6.
 		MaxColorDelta: 3,
+		// Same soundtrack re-encoded or copied stays below 0.01; a 12 dB
+		// volume change is 2, a different song, pitch or noise 5 and above.
+		MaxAudioDelta: 0.5,
 	}
 }
 
@@ -202,7 +205,7 @@ func Compare(l, r *model.PhysicalFile, p model.MatchParams) (model.MatchEdge, bo
 		DurationDeltaSeconds: round3(math.Abs(l.Media.DurationSec - r.Media.DurationSec)),
 	}
 	total := 0
-	var color float64
+	var color, audio float64
 	for i := range lv.Frames {
 		a, c := lv.Frames[i], rv.Frames[i]
 		if a.Failed || c.Failed || a.LowInfo || c.LowInfo {
@@ -210,6 +213,10 @@ func Compare(l, r *model.PhysicalFile, p model.MatchParams) (model.MatchEdge, bo
 		}
 		m.ComparableFrames++
 		color += colorDistance(a, c)
+		if a.Audio != nil && c.Audio != nil {
+			m.AudioCompared++
+			audio += audioDistance(*a.Audio, *c.Audio)
+		}
 		d := fingerprint.Hamming(a.DHash, c.DHash)
 		total += d
 		if d <= p.FrameHammingThreshold {
@@ -222,6 +229,9 @@ func Compare(l, r *model.PhysicalFile, p model.MatchParams) (model.MatchEdge, bo
 	m.MatchRatio = round3(ratio(m.MatchingFrames, m.ComparableFrames))
 	m.MeanHamming = round3(float64(total) / float64(m.ComparableFrames))
 	m.ColorDelta = round3(color / float64(m.ComparableFrames))
+	if m.AudioCompared > 0 {
+		m.AudioDelta = round3(audio / float64(m.AudioCompared))
+	}
 	e := model.MatchEdge{Left: l.ID, Right: r.ID, Visual: &m}
 	ev := []string{
 		fmt.Sprintf("visual fingerprint: %d of %d informative samples match (mean Hamming distance %.1f of 64 bits)", m.MatchingFrames, m.ComparableFrames, m.MeanHamming),
@@ -350,4 +360,14 @@ func colorDistance(a, b model.FrameSample) float64 {
 		d = sum / float64(n/2)
 	}
 	return d + math.Abs(a.Chroma-b.Chroma)
+}
+
+// audioDistance compares two audio descriptions: loudness difference in
+// units of 6 dB plus zero-crossing rate difference in units of 0.02. Both
+// below -60 dBFS (silence) count as equal.
+func audioDistance(a, b model.AudioSample) float64 {
+	if a.RMSdB < -60 && b.RMSdB < -60 {
+		return 0
+	}
+	return math.Abs(a.RMSdB-b.RMSdB)/6 + math.Abs(a.ZCR-b.ZCR)/0.02
 }

@@ -38,7 +38,7 @@ func video(w, h int, codec string, br int64, audio, subs int) fopt {
 			mi.Streams = append(mi.Streams, model.StreamInfo{Index: 10 + i, Type: "subtitle", Codec: "srt", Language: "eng"})
 		}
 		f.Media = mi
-		f.Visual = &model.VisualFingerprint{Params: model.VisualParams{AlgorithmVersion: 3}, Frames: make([]model.FrameSample, 16)}
+		f.Visual = &model.VisualFingerprint{Params: model.VisualParams{AlgorithmVersion: 4}, Frames: make([]model.FrameSample, 16)}
 		for i := range f.Visual.Frames {
 			f.Visual.Frames[i].DHash = uint64(0xFF) << (8 * (i % 8)) // a moving picture
 		}
@@ -76,7 +76,7 @@ func scanOf(rel string, files []model.PhysicalFile, edges [][2]string, edgeRel .
 		id := "m" + string(rune('a'+i))
 		me := model.MatchEdge{ID: id, Left: e[0], Right: e[1], Relation: er, Evidence: []string{"test"}}
 		if er == model.RelationVisuallySimilar {
-			me.Visual = &model.VisualMetrics{ComparableFrames: 16, MatchingFrames: 16, MatchRatio: 1}
+			me.Visual = &model.VisualMetrics{ComparableFrames: 16, MatchingFrames: 16, MatchRatio: 1, AudioCompared: 16}
 		}
 		r.Edges = append(r.Edges, me)
 		g.Edges = append(g.Edges, id)
@@ -523,5 +523,65 @@ func TestEvidenceThroughByteIdenticalCopyButNotChains(t *testing.T) {
 	}
 	if dec["fD"].Decision != model.DecisionManualReview || !hasReason(dec["fD"], "no_direct_evidence") {
 		t.Fatalf("D must not rely on a chain: %+v", dec["fD"])
+	}
+}
+
+// The same picture with different sound must never be proposed under
+// balanced; a plain lower-resolution copy with the same sound may be.
+func TestBalancedAudioCases(t *testing.T) {
+	keeper := func() model.PhysicalFile {
+		return pf("f1", 3000, video(1920, 1080, "h264", 8e6, 1, 0), protected, withAudio("aac", 2, "stereo", 48000, 128000))
+	}
+	lower := func(opts ...fopt) model.PhysicalFile {
+		return pf("f2", 1000, append([]fopt{video(1280, 720, "h264", 2e6, 1, 0), withAudio("aac", 2, "stereo", 48000, 128000)}, opts...)...)
+	}
+	cases := []struct {
+		name   string
+		member model.PhysicalFile
+		metric func(*model.VisualMetrics)
+		want   string // a review reason, or "" for a candidate
+	}{
+		{"same sound, lower resolution", lower(), nil, ""},
+		{"different audio codec", lower(withAudio("ac3", 2, "stereo", 48000, 128000)), nil, "audio_format_differs"},
+		{"different channel count", lower(withAudio("aac", 6, "5.1", 48000, 128000)), nil, "audio_format_differs"},
+		{"different sample rate", lower(withAudio("aac", 2, "stereo", 44100, 128000)), nil, "audio_format_differs"},
+		{"different audio bitrate", lower(withAudio("aac", 2, "stereo", 48000, 64000)), nil, "audio_bitrate_differs"},
+		{"different audio content", lower(), func(v *model.VisualMetrics) { v.AudioDelta = 6.2 }, "audio_content_differs"},
+		{"audio not compared", lower(), func(v *model.VisualMetrics) { v.AudioCompared = 3 }, "audio_not_compared"},
+		{"different subtitles", pf("f2", 1000, video(1280, 720, "h264", 2e6, 1, 1), withAudio("aac", 2, "stereo", 48000, 128000)), nil, "subtitles_present"},
+		{"no audio track", pf("f2", 1000, video(1280, 720, "h264", 2e6, 0, 0)), nil, "audio_track_count_differs"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := scanOf(model.RelationVisuallySimilar, []model.PhysicalFile{keeper(), c.member}, [][2]string{{"f1", "f2"}})
+			if c.metric != nil {
+				c.metric(r.Edges[0].Visual)
+			}
+			_, d := eval(t, r, model.PolicyBalanced)
+			got := d["f2"]
+			if c.want == "" {
+				if got.Decision != model.DecisionRedundantCandidate || !hasReason(got, "audio agrees coarsely") {
+					t.Fatalf("want a candidate noting the coarse audio check: %+v", got)
+				}
+				return
+			}
+			if got.Decision == model.DecisionRedundantCandidate || !hasReason(got, c.want) {
+				t.Fatalf("want review with %s: %+v", c.want, got)
+			}
+		})
+	}
+}
+
+// withAudio replaces the audio tracks with one track of the given format.
+func withAudio(codec string, ch int, layout string, rate int, br int64) fopt {
+	return func(f *model.PhysicalFile) {
+		var keep []model.StreamInfo
+		for _, s := range f.Media.Streams {
+			if s.Type != "audio" {
+				keep = append(keep, s)
+			}
+		}
+		f.Media.Streams = append(keep, model.StreamInfo{Index: 1, Type: "audio", Codec: codec, Channels: ch, ChannelLayout: layout, SampleRate: rate, BitRate: br, Language: "jpn"})
+		f.Media.AudioStreams = 1
 	}
 }

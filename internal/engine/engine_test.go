@@ -24,6 +24,9 @@ type fakeTools struct {
 
 func (f *fakeTools) Version() string      { return "fake-ffmpeg" }
 func (f *fakeTools) ProbeVersion() string { return "fake-ffprobe" }
+func (f *fakeTools) ExtractAudio(context.Context, string, float64, int) ([]byte, error) {
+	return nil, nil
+}
 func (f *fakeTools) Probe(_ context.Context, path string) (*model.MediaInfo, error) {
 	f.probes.Add(1)
 	if f.onProbe != nil {

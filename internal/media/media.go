@@ -52,8 +52,17 @@ type Prober interface {
 // the given time. A nil slice with nil error means no frame exists there.
 type FrameExtractor interface {
 	ExtractRGB(ctx context.Context, path string, atSec float64, streamIndex, w, h int) ([]byte, error)
+	// ExtractAudio returns AudioWindow seconds of the given audio stream from
+	// atSec as signed 16-bit little-endian mono samples at AudioRate Hz.
+	ExtractAudio(ctx context.Context, path string, atSec float64, streamIndex int) ([]byte, error)
 	Version() string
 }
+
+// Audio window sampled at each visual sample time.
+const (
+	AudioRate   = 8000
+	AudioWindow = 0.5
+)
 
 // Tools bundles the two binaries.
 type Tools struct {
