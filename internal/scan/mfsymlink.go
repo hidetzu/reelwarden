@@ -2,8 +2,9 @@ package scan
 
 import (
 	"bytes"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // the XSym format mandates MD5; not used for security
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 )
@@ -37,7 +38,8 @@ func parseMFSymlink(data []byte) (string, bool) {
 		return "", false
 	}
 	raw := data[43 : 43+n]
-	sum := md5.Sum(raw) // over the stated length, as the kernel hashes it
+	// The XSym format defines this checksum; MD5 is not used for security.
+	sum := md5.Sum(raw) //nolint:gosec // format-mandated checksum, hashed over the stated length like the kernel
 	if hex.EncodeToString(sum[:])[:17] != string(data[10:27]) {
 		return "", false
 	}
@@ -79,7 +81,7 @@ func readMFSymlink(path string, size int64) (string, bool) {
 	defer f.Close()
 	buf := make([]byte, mfSymlinkSize+1)
 	n, err := io.ReadFull(f, buf)
-	if err != io.ErrUnexpectedEOF || n != mfSymlinkSize {
+	if !errors.Is(err, io.ErrUnexpectedEOF) || n != mfSymlinkSize {
 		return "", false
 	}
 	return parseMFSymlink(buf[:n])

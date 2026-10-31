@@ -65,7 +65,7 @@ func inspectRoot(path string) RootInfo {
 	if err := syscall.Statfs(path, &st); err != nil {
 		return RootInfo{Confidence: model.ConfidenceUnknown}
 	}
-	if fs, ok := fsNames[fsMagic(int64(st.Type))]; ok {
+	if fs, ok := fsNames[fsMagic(int64(st.Type))]; ok { //nolint:unconvert // f_type is int32 on 32-bit Linux
 		conf := model.ConfidenceHigh
 		if fs.network || fs.untrusted {
 			conf = model.ConfidenceLow

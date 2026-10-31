@@ -35,7 +35,7 @@ func TestCIFSServerSideLinksAreNeverTrusted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := scan.RealTempDir(t)
 			fileA := filepath.Join(dir, "share1", "fileA.mp4")
 			fileB := filepath.Join(dir, "share2", "fileB.mp4")
 			for _, p := range []string{fileA, fileB} {

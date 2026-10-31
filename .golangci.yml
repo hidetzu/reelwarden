@@ -8,6 +8,18 @@ linters:
     - misspell
     - unconvert
   settings:
+    errcheck:
+      # Writes to the terminal and closing files that were only read cannot
+      # fail in a way the program could act on.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Close
+        - os.Remove
+        - os.RemoveAll
+        - (*go.etcd.io/bbolt.DB).Close
+        - (github.com/hidetzu/reelwarden/internal/cache.Store).Close
     gosec:
       excludes:
         - G204 # subprocess with variable args: ffmpeg/ffprobe paths are user-chosen and passed as argv, never via a shell
@@ -16,6 +28,8 @@ linters:
   exclusions:
     rules:
       - path: _test\.go
+        linters: [errcheck, gosec]
+      - path: internal/testutil/
         linters: [errcheck, gosec]
 formatters:
   enable:

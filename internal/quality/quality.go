@@ -129,7 +129,7 @@ func (p Profile) Summary() string {
 	if p.HDR {
 		parts = append(parts, "HDR("+p.ColorTransfer+")")
 	}
-	parts = append(parts, fmt.Sprintf("%s", formatDuration(p.DurationSec)))
+	parts = append(parts, formatDuration(p.DurationSec))
 	parts = append(parts, fmt.Sprintf("audio: %d", p.AudioStreams))
 	parts = append(parts, fmt.Sprintf("subs: %d", p.Subtitles))
 	if p.Chapters > 0 {
