@@ -174,6 +174,9 @@ type MatchParams struct {
 	// MaxColorDelta is the largest ColorDelta at which balanced may still
 	// propose a visually similar copy.
 	MaxColorDelta float64 `json:"max_color_delta"`
+	// MaxAudioDelta is the largest AudioDelta at which balanced may still
+	// propose a copy whose audio was described.
+	MaxAudioDelta float64 `json:"max_audio_delta"`
 }
 
 // PathEntry is one directory entry (regular file or symlink) found in the walk.
@@ -226,6 +229,17 @@ type FrameSample struct {
 	// CellCbCr holds mean Cb, Cr pairs for each cell of a 3x3 grid, row by row.
 	CellCbCr []float64 `json:"cell_cbcr,omitempty"`
 	Failed   bool      `json:"failed,omitempty"`
+	// Audio is a coarse description of the first audio track around this
+	// sample (loudness and zero-crossing rate of 0.5 s); nil when the file
+	// has no audio or it could not be decoded there. It is not an audio
+	// fingerprint: it tells clearly different sound apart, nothing more.
+	Audio *AudioSample `json:"audio,omitempty"`
+}
+
+// AudioSample describes 0.5 s of mono audio at 8 kHz.
+type AudioSample struct {
+	RMSdB float64 `json:"rms_db"` // loudness, dBFS (-90 for silence)
+	ZCR   float64 `json:"zcr"`    // zero crossings per sample, a pitch/noise hint
 }
 
 // VisualFingerprint is the sampled perceptual signature of an entity.
@@ -298,6 +312,19 @@ type MediaInfo struct {
 	DataStreams int    `json:"data_streams"`
 	ProbeError  string `json:"probe_error,omitempty"`
 	FromCache   bool   `json:"from_cache,omitempty"`
+}
+
+// PrimaryAudio returns the first audio stream, or nil.
+func (m *MediaInfo) PrimaryAudio() *StreamInfo {
+	if m == nil {
+		return nil
+	}
+	for i := range m.Streams {
+		if m.Streams[i].Type == "audio" {
+			return &m.Streams[i]
+		}
+	}
+	return nil
 }
 
 // PrimaryVideo returns the first non-attached-picture video stream, or nil.
@@ -395,6 +422,10 @@ type VisualMetrics struct {
 	LeftLowInfoRatio     float64 `json:"left_low_info_ratio"`
 	RightLowInfoRatio    float64 `json:"right_low_info_ratio"`
 	DurationDeltaSeconds float64 `json:"duration_delta_seconds"`
+	// AudioCompared counts samples where both files had audio described;
+	// AudioDelta is their mean difference (see match.audioDistance).
+	AudioCompared int     `json:"audio_compared"`
+	AudioDelta    float64 `json:"audio_delta"`
 	// ColorDelta is the mean, over comparable frames, of the per-cell Cb/Cr
 	// distance (or the whole-frame one for fingerprints without cells) plus
 	// the difference in chroma magnitude.
@@ -490,6 +521,7 @@ type Index struct {
 	Edges   map[string]*MatchEdge
 	// EdgesByFile maps a physical file ID to the edges touching it.
 	EdgesByFile map[string][]*MatchEdge
+	byPair      map[[2]string]*MatchEdge
 }
 
 // NewIndex builds an Index over r. The maps point into r's slices.
@@ -499,6 +531,7 @@ func NewIndex(r *ScanResult) *Index {
 		Entries:     make(map[string]*PathEntry, len(r.Entries)),
 		Edges:       make(map[string]*MatchEdge, len(r.Edges)),
 		EdgesByFile: make(map[string][]*MatchEdge),
+		byPair:      make(map[[2]string]*MatchEdge),
 	}
 	for i := range r.Files {
 		ix.Files[r.Files[i].ID] = &r.Files[i]
@@ -511,16 +544,21 @@ func NewIndex(r *ScanResult) *Index {
 		ix.Edges[e.ID] = e
 		ix.EdgesByFile[e.Left] = append(ix.EdgesByFile[e.Left], e)
 		ix.EdgesByFile[e.Right] = append(ix.EdgesByFile[e.Right], e)
+		if _, dup := ix.byPair[pair(e.Left, e.Right)]; !dup {
+			ix.byPair[pair(e.Left, e.Right)] = e
+		}
 	}
 	return ix
 }
 
 // EdgeBetween returns the direct edge between a and b, if any.
 func (ix *Index) EdgeBetween(a, b string) *MatchEdge {
-	for _, e := range ix.EdgesByFile[a] {
-		if o, ok := e.Other(a); ok && o == b {
-			return e
-		}
+	return ix.byPair[pair(a, b)]
+}
+
+func pair(a, b string) [2]string {
+	if a > b {
+		a, b = b, a
 	}
-	return nil
+	return [2]string{a, b}
 }

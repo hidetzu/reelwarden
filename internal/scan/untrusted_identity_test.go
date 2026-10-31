@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hidetzu/reelwarden/internal/decision"
@@ -95,6 +96,17 @@ func TestCIFSServerSideLinksAreNeverTrusted(t *testing.T) {
 			if res.Stats.HardlinkAliases != 0 {
 				t.Errorf("hard-link aliases = %d, want 0 (not confirmed)", res.Stats.HardlinkAliases)
 			}
+			// The uncertainty is said, not only encoded: a warning when both
+			// paths report one identity, and a reason on every member.
+			if tc.inodeA == tc.inodeB {
+				found := false
+				for _, w := range res.Warnings {
+					found = found || w.Code == "identity_unconfirmed"
+				}
+				if !found {
+					t.Errorf("no identity_unconfirmed warning: %+v", res.Warnings)
+				}
+			}
 
 			// deletion_safe = false, reclaimable_bytes = unknown
 			for _, policy := range []string{model.PolicyConservative, model.PolicyBalanced} {
@@ -109,6 +121,9 @@ func TestCIFSServerSideLinksAreNeverTrusted(t *testing.T) {
 				for _, m := range g.Members {
 					if m.Decision == model.DecisionRedundantCandidate {
 						t.Errorf("%s: %s proposed for deletion", policy, m.Path)
+					}
+					if m.Decision != model.DecisionRecommendedKeep && !strings.Contains(strings.Join(m.Reasons, " "), "hidden_links_possible") {
+						t.Errorf("%s: %s gives no reason about unobservable links: %v", policy, m.Path, m.Reasons)
 					}
 				}
 				if g.Action != model.ActionReview {

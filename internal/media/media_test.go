@@ -139,3 +139,27 @@ func TestParseProbeCountsAttachments(t *testing.T) {
 		t.Fatalf("video %d, attachments %d; want 1 and 2", mi.VideoStreams, mi.Attachments)
 	}
 }
+
+// A process that floods stdout (a hostile or broken file, a wrapper gone
+// wrong) is stopped at the limit; nothing is parsed from a partial output.
+func TestProbeOutputIsBounded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as ffprobe")
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ffprobe")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec yes '{\"streams\":[]}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clip := filepath.Join(dir, "a.mp4")
+	os.WriteFile(clip, []byte("x"), 0o644)
+	tools := &Tools{FFprobePath: fake, Timeout: 20 * time.Second}
+	start := time.Now()
+	mi, err := tools.Probe(context.Background(), clip)
+	if !errors.Is(err, ErrOutputTooLarge) || mi != nil {
+		t.Fatalf("got %v, %v; want ErrOutputTooLarge", mi, err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("flooding process was not stopped promptly: %s", time.Since(start))
+	}
+}

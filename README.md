@@ -61,8 +61,12 @@ protected root are never proposed themselves. Other useful options: `--exclude G
 Decisions are `recommended_keep`, `redundant_candidate` (a candidate, not a deletion approval),
 `manual_review` and `insufficient_evidence`. `report` and `plan` default to `--policy conservative`, which
 proposes only byte-identical copies. `--policy balanced` (experimental) also proposes clearly inferior
-re-encodes; it compares 16 sampled frames by default and never compares audio, so check each of its
-candidates yourself.
+re-encodes, only when the sampled frames, colours and audio formats match and a coarse description of the
+sound (loudness and zero-crossing rate at 16 points by default) agrees. Audio is not fingerprinted and
+subtitle text is not compared, so check each of its candidates yourself.
+
+Every space figure is an estimate: reflinks, compression, snapshots and NAS deduplication change what is
+really freed.
 
 Exit codes: `0` ok, `1` error, `2` usage, `3` FFmpeg missing, `4` partial (for example a root that does not
 exist; a partial scan yields no candidates), `130` cancelled. See [`docs/design.md`](docs/design.md) §11.
@@ -77,8 +81,9 @@ exist; a partial scan yields no candidates), `130` cancelled. See [`docs/design.
   protect a folder that holds one under another name.
 - On NFS/SMB, FUSE, overlay, FAT/exFAT and unrecognised filesystems, file identity may be unreliable, so
   nothing there is proposed.
-- Tested on Linux (amd64, and ARMv7 on a Synology DS218j). macOS and Windows are covered by CI only
-  and have not been tried on real machines yet.
+- Tested on real hardware on Linux amd64 and on a Synology DS218j (ARMv7, 512 MB, exact mode; DSM has no
+  `ffprobe`, so video mode was not run there). macOS and Windows are tested by CI only. Measurements are
+  in [`docs/design.md`](docs/design.md) §12.
 
 The full list is in [`docs/design.md`](docs/design.md).
 

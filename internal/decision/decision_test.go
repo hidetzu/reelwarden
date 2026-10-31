@@ -1,10 +1,12 @@
 package decision
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hidetzu/reelwarden/internal/match"
 	"github.com/hidetzu/reelwarden/internal/model"
 )
 
@@ -36,7 +38,7 @@ func video(w, h int, codec string, br int64, audio, subs int) fopt {
 			mi.Streams = append(mi.Streams, model.StreamInfo{Index: 10 + i, Type: "subtitle", Codec: "srt", Language: "eng"})
 		}
 		f.Media = mi
-		f.Visual = &model.VisualFingerprint{Params: model.VisualParams{AlgorithmVersion: 3}, Frames: make([]model.FrameSample, 16)}
+		f.Visual = &model.VisualFingerprint{Params: model.VisualParams{AlgorithmVersion: 4}, Frames: make([]model.FrameSample, 16)}
 		for i := range f.Visual.Frames {
 			f.Visual.Frames[i].DHash = uint64(0xFF) << (8 * (i % 8)) // a moving picture
 		}
@@ -74,7 +76,7 @@ func scanOf(rel string, files []model.PhysicalFile, edges [][2]string, edgeRel .
 		id := "m" + string(rune('a'+i))
 		me := model.MatchEdge{ID: id, Left: e[0], Right: e[1], Relation: er, Evidence: []string{"test"}}
 		if er == model.RelationVisuallySimilar {
-			me.Visual = &model.VisualMetrics{ComparableFrames: 16, MatchingFrames: 16, MatchRatio: 1}
+			me.Visual = &model.VisualMetrics{ComparableFrames: 16, MatchingFrames: 16, MatchRatio: 1, AudioCompared: 16}
 		}
 		r.Edges = append(r.Edges, me)
 		g.Edges = append(g.Edges, id)
@@ -461,5 +463,125 @@ func TestCandidateNeedsProtectedKeeper(t *testing.T) {
 	_, d = eval(t, r, model.PolicyConservative)
 	if d["f2"].Decision != model.DecisionRedundantCandidate {
 		t.Fatalf("protected keeper: %+v", d["f2"])
+	}
+}
+
+// 10,000 copies of one video, one of them in the protected library: every
+// other copy is a candidate, and evaluation and plan stay linear.
+func TestManyIdenticalCopiesScale(t *testing.T) {
+	const n = 10000
+	files := make([]model.PhysicalFile, n)
+	for i := range files {
+		files[i] = pf(fmt.Sprintf("f%06d", i+1), 1<<20)
+		files[i].Identity = &model.FileIdentity{Device: 1, Inode: uint64(i + 1)}
+		files[i].Exact = &model.ExactFingerprint{SHA256: "0123456789abcdef0123456789abcdef"}
+	}
+	protected(&files[n/2])
+	m := match.Build(files, match.DefaultParams(), false)
+	if len(m.Edges) != n-1 || len(m.Groups) != 1 {
+		t.Fatalf("edges %d, groups %d", len(m.Edges), len(m.Groups))
+	}
+	r := &model.ScanResult{Status: model.StatusComplete, Files: files, Edges: m.Edges, Groups: m.Groups}
+	ev, err := Evaluate(r, model.PolicyConservative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := ev.Groups[0]
+	if g.Keeper != files[n/2].ID || ev.Summary.RedundantCandidates != n-1 {
+		t.Fatalf("keeper %s, candidates %d", g.Keeper, ev.Summary.RedundantCandidates)
+	}
+	if len(g.Evidence) != n-1 {
+		t.Fatalf("evidence lines %d, want %d (one per edge)", len(g.Evidence), n-1)
+	}
+	p := BuildPlan(r, ev, "scan.json", model.ToolInfo{})
+	if len(p.Groups[0].Actions) != n-1 {
+		t.Fatalf("plan actions %d", len(p.Groups[0].Actions))
+	}
+}
+
+// A and B are byte-identical; only A was compared visually with the
+// protected keeper K. B may rely on A's comparison (same bytes, same
+// picture), but D, similar to A only, must not rely on a chain.
+func TestEvidenceThroughByteIdenticalCopyButNotChains(t *testing.T) {
+	k := pf("fK", 3000, video(1920, 1080, "h264", 8e6, 1, 0), protected)
+	a := pf("fA", 1000, video(1280, 720, "h264", 2e6, 1, 0))
+	b := pf("fB", 1000, video(1280, 720, "h264", 2e6, 1, 0))
+	d := pf("fD", 900, video(1280, 720, "h264", 1.9e6, 1, 0))
+	a.Exact = &model.ExactFingerprint{SHA256: "aaaa"}
+	b.Exact = &model.ExactFingerprint{SHA256: "aaaa"}
+	d.Exact = &model.ExactFingerprint{SHA256: "dddd"}
+	k.Exact = &model.ExactFingerprint{SHA256: "kkkk"}
+	r := scanOf(model.RelationMixed, []model.PhysicalFile{k, a, b, d},
+		[][2]string{{"fA", "fB"}, {"fA", "fK"}, {"fA", "fD"}},
+		model.RelationByteIdentical, model.RelationVisuallySimilar, model.RelationVisuallySimilar)
+	_, dec := eval(t, r, model.PolicyBalanced)
+	if dec["fA"].Decision != model.DecisionRedundantCandidate {
+		t.Fatalf("A: %+v", dec["fA"])
+	}
+	if dec["fB"].Decision != model.DecisionRedundantCandidate || !hasReason(dec["fB"], "byte-identical copy") {
+		t.Fatalf("B should use A's comparison: %+v", dec["fB"])
+	}
+	if dec["fD"].Decision != model.DecisionManualReview || !hasReason(dec["fD"], "no_direct_evidence") {
+		t.Fatalf("D must not rely on a chain: %+v", dec["fD"])
+	}
+}
+
+// The same picture with different sound must never be proposed under
+// balanced; a plain lower-resolution copy with the same sound may be.
+func TestBalancedAudioCases(t *testing.T) {
+	keeper := func() model.PhysicalFile {
+		return pf("f1", 3000, video(1920, 1080, "h264", 8e6, 1, 0), protected, withAudio("aac", 2, "stereo", 48000, 128000))
+	}
+	lower := func(opts ...fopt) model.PhysicalFile {
+		return pf("f2", 1000, append([]fopt{video(1280, 720, "h264", 2e6, 1, 0), withAudio("aac", 2, "stereo", 48000, 128000)}, opts...)...)
+	}
+	cases := []struct {
+		name   string
+		member model.PhysicalFile
+		metric func(*model.VisualMetrics)
+		want   string // a review reason, or "" for a candidate
+	}{
+		{"same sound, lower resolution", lower(), nil, ""},
+		{"different audio codec", lower(withAudio("ac3", 2, "stereo", 48000, 128000)), nil, "audio_format_differs"},
+		{"different channel count", lower(withAudio("aac", 6, "5.1", 48000, 128000)), nil, "audio_format_differs"},
+		{"different sample rate", lower(withAudio("aac", 2, "stereo", 44100, 128000)), nil, "audio_format_differs"},
+		{"different audio bitrate", lower(withAudio("aac", 2, "stereo", 48000, 64000)), nil, "audio_bitrate_differs"},
+		{"different audio content", lower(), func(v *model.VisualMetrics) { v.AudioDelta = 6.2 }, "audio_content_differs"},
+		{"audio not compared", lower(), func(v *model.VisualMetrics) { v.AudioCompared = 3 }, "audio_not_compared"},
+		{"different subtitles", pf("f2", 1000, video(1280, 720, "h264", 2e6, 1, 1), withAudio("aac", 2, "stereo", 48000, 128000)), nil, "subtitles_present"},
+		{"no audio track", pf("f2", 1000, video(1280, 720, "h264", 2e6, 0, 0)), nil, "audio_track_count_differs"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := scanOf(model.RelationVisuallySimilar, []model.PhysicalFile{keeper(), c.member}, [][2]string{{"f1", "f2"}})
+			if c.metric != nil {
+				c.metric(r.Edges[0].Visual)
+			}
+			_, d := eval(t, r, model.PolicyBalanced)
+			got := d["f2"]
+			if c.want == "" {
+				if got.Decision != model.DecisionRedundantCandidate || !hasReason(got, "audio agrees coarsely") {
+					t.Fatalf("want a candidate noting the coarse audio check: %+v", got)
+				}
+				return
+			}
+			if got.Decision == model.DecisionRedundantCandidate || !hasReason(got, c.want) {
+				t.Fatalf("want review with %s: %+v", c.want, got)
+			}
+		})
+	}
+}
+
+// withAudio replaces the audio tracks with one track of the given format.
+func withAudio(codec string, ch int, layout string, rate int, br int64) fopt {
+	return func(f *model.PhysicalFile) {
+		var keep []model.StreamInfo
+		for _, s := range f.Media.Streams {
+			if s.Type != "audio" {
+				keep = append(keep, s)
+			}
+		}
+		f.Media.Streams = append(keep, model.StreamInfo{Index: 1, Type: "audio", Codec: codec, Channels: ch, ChannelLayout: layout, SampleRate: rate, BitRate: br, Language: "jpn"})
+		f.Media.AudioStreams = 1
 	}
 }

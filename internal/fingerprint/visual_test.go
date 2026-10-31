@@ -47,6 +47,9 @@ type fakeExtractor struct {
 }
 
 func (f *fakeExtractor) Version() string { return "fake" }
+func (f *fakeExtractor) ExtractAudio(context.Context, string, float64, int) ([]byte, error) {
+	return nil, nil
+}
 func (f *fakeExtractor) ExtractRGB(_ context.Context, _ string, at float64, _, w, h int) ([]byte, error) {
 	if f.err != nil {
 		return nil, f.err
