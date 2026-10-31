@@ -4,7 +4,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Planned as `0.1.0-dev.1`, the first development preview. Read-only: nothing is deleted, moved or relinked.
+## [0.1.0-dev.1] - 2026-10-31
+
+First development preview. Read-only: nothing is deleted, moved or relinked.
 
 ### Added
 
@@ -83,4 +85,5 @@ Planned as `0.1.0-dev.1`, the first development preview. Read-only: nothing is d
 - ffprobe and ffmpeg output is capped per call (8 MiB for ffprobe JSON);
   output beyond the cap fails the call instead of being parsed in part.
 
-[Unreleased]: https://github.com/hidetzu/reelwarden/commits/main
+[Unreleased]: https://github.com/hidetzu/reelwarden/compare/v0.1.0-dev.1...HEAD
+[0.1.0-dev.1]: https://github.com/hidetzu/reelwarden/releases/tag/v0.1.0-dev.1
