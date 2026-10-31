@@ -71,7 +71,7 @@ type Store interface {
 
 // Open opens (or creates) the cache database under dir.
 func Open(dir string) (Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	path := filepath.Join(dir, "cache.db")

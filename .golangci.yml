@@ -25,6 +25,7 @@ linters:
         - G204 # subprocess with variable args: ffmpeg/ffprobe paths are user-chosen and passed as argv, never via a shell
         - G304 # file inclusion via variable: reading user-selected files is the purpose of the tool
         - G115 # integer conversions of OS identity fields are intentional
+        - G104 # unhandled errors: errcheck reports these, with the exclusions above
   exclusions:
     rules:
       - path: _test\.go
