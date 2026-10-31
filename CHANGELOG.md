@@ -59,7 +59,10 @@ Planned as `0.1.0-dev.1`, the first development preview. Read-only: nothing is d
   the depth limit and unreadable excluded folders make a scan partial.
 - `balanced` proposes a re-encode only when every sampled frame and the
   colours match, the picture is not near-static, neither copy has
-  subtitles, cover art or attachments and data streams match; plans warn that audio
+  subtitles, cover art or attachments, data streams match, every audio
+  track has the same codec, channels, layout, sample rate and (within 10%)
+  bitrate, and a coarse audio description (loudness, zero-crossing rate)
+  agrees; plans warn that audio
   is not compared.
 - Missing or non-directory roots exit 4 and are reported even with
   `--quiet`.
@@ -69,5 +72,15 @@ Planned as `0.1.0-dev.1`, the first development preview. Read-only: nothing is d
 - Corrupted caches and inconsistent scan files give errors, not panics;
   table output quotes control characters in names.
 - Release archives include third-party license texts.
+
+### Performance
+
+- Byte-identical copies are stored as one set per SHA-256 (n-1 edges, not
+  every pair) and compared visually once per set; groups and edge lookups
+  are linear. 3,000 copies of one file: 12 GB peak and a 1.5 GB scan.json
+  before, 32 MiB on a Synology DS218j now.
+- Symlink references are attached through an index (linear in links).
+- ffprobe and ffmpeg output is capped per call (8 MiB for ffprobe JSON);
+  output beyond the cap fails the call instead of being parsed in part.
 
 [Unreleased]: https://github.com/hidetzu/reelwarden/commits/main

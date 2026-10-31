@@ -40,7 +40,13 @@ us a redistributor. So `ffprobe`/`ffmpeg` are run as separate programs from
 `PATH` or `--ffprobe-path`/`--ffmpeg-path`, and are not shipped.
 
 - Argument arrays only, never a shell. Per-call timeout, 16 KiB stderr cap,
-  separate worker pool from file I/O.
+  separate worker pool from file I/O (`--media-workers`, default
+  min(4, CPUs/2); lower it on a low-memory NAS).
+- stdout is capped per call: 8 MiB for ffprobe JSON (normal output is tens
+  of KiB, thousands of chapters stay within a few MiB; 4 workers bound the
+  worst case at 32 MiB), the exact size for frames and audio windows, 64 KiB
+  for version strings. Beyond the cap the process is stopped and the call
+  fails; a partial output is never parsed.
 - Inputs use the `file:` prefix and `-protocol_whitelist file`, so a file
   named `http://...` or `concat:...` is never treated as a protocol.
 - `--mode exact` needs no FFmpeg; `--mode video` and `doctor` fail clearly
@@ -117,7 +123,11 @@ macOS; they are flagged `unicode_conflict` and never decided.
 Only entities of equal size are read: partial SHA-256 (first, middle, last
 64 KiB), then streaming full SHA-256. Only equal full hashes make
 `byte_identical`. SHA-256 because users can verify plan preconditions with
-standard tools. Each file is re-stat'ed after reading; a size or mtime
+standard tools. Equal SHA-256 is an equivalence, so a set of n identical
+files is stored as a star (each copy linked to the first by ID, n-1 edges)
+instead of all n(n-1)/2 pairs; each edge says how many files share the
+hash. 3,000 copies of one file took a 12 GB peak and a 1.5 GB scan.json
+before (linux/amd64) and take 32 MiB on a Synology DS218j now. Each file is re-stat'ed after reading; a size or mtime
 change marks it `changed_during_scan` and discards the result.
 
 ## 6. Visual fingerprint
@@ -134,6 +144,15 @@ mean < 8 are low-information and ignored. Sampling parameters, algorithm version
 FFmpeg version are part of the fingerprint. Keyframe hashing was rejected
 because keyframe positions differ between encodes; pHash is deferred.
 
+At each sample time the first audio track is also described coarsely: 0.5 s
+decoded to 8 kHz mono, reduced to loudness (RMS, dBFS) and zero-crossing
+rate. This is not an audio fingerprint; it only tells clearly different
+sound apart. Measured on synthetic clips, the distance (loudness / 6 dB plus
+zero-crossing rate / 0.02, averaged) is 0 for a copied track and 0.004 for a
+64 kbit/s re-encode, 2.0 for a 12 dB volume change, 5.0 for a 6% pitch
+shift, 6.2 for another tune, 7.8 for noise and 23 for silence. Algorithm
+version 4.
+
 Not handled: trims, time offsets, crops, letterboxing, speed changes,
 watermarks. Those end as no match or `uncertain`, never `visually_similar`.
 
@@ -147,7 +166,10 @@ Per pair: comparable frames, matching frames (Hamming <= 10), mean Hamming.
 
 Groups are connected components over the first two relations and keep every
 edge. A decision needs a direct edge to the keeper, so A~B and B~C never
-make C redundant against A. Thresholds were tuned on the synthetic set in
+make C redundant against A. Byte-identical copies are the one exception,
+because they are exact: visual comparison runs once per byte-identical set
+(its first member with a fingerprint), and a member may use that comparison
+or the shared SHA-256 as its evidence against the keeper. Thresholds were tuned on the synthetic set in
 `internal/cli/e2e_test.go` only.
 
 ## 8. Cache
@@ -159,6 +181,9 @@ version all match. ctime cannot be set back, so a rewrite that restores mtime
 still invalidates the entry. The exact cache keeps only partial hashes as a
 pre-filter: a `byte_identical` edge always rests on full SHA-256 hashes read
 in the same run, so a stale entry can hide a duplicate but never invent one.
+The cache therefore saves little in exact mode (3,000 copies on a DS218j:
+27.7 s cold, 22.5 s warm) and most in video mode, where probes and
+fingerprints are reused.
 Default `os.UserCacheDir()/reelwarden`; `--cache-dir`, `--no-cache`. The
 cache only saves time; `--no-cache` removes the residual risk of a reused
 inode with identical size and mtime.
@@ -187,10 +212,14 @@ approval), `manual_review`, `insufficient_evidence`. Rules, in order:
    lower frame rate or bit depth, means review.
 6. `conservative` (default) never proposes visually similar files.
    `balanced` (experimental) may, but only when every sampled frame matches,
-   the colours match and the picture is not near-static. Audio content and anything between
-   the samples are never compared, and dHash ignores small details, so a
-   different soundtrack or burned-in text or logos can still slip through;
-   plans say so.
+   the colours match, the picture is not near-static, every audio track has
+   the same codec, channels, layout and sample rate with bitrates within
+   10% (metadata cannot rank audio quality), and, with audio on either side,
+   the coarse audio description was compared at half the samples or more
+   and agrees (distance <= 0.5). Audio is not fingerprinted, subtitle text
+   and attachments are not compared (any subtitle or attachment means
+   review), and dHash ignores small details, so a remixed soundtrack at the
+   same loudness or burned-in text can still slip through; plans say so.
 7. No direct edge to the keeper: review.
 8. External hard links, low-confidence identity of the member or of the
    keeper (it might be the same file seen through another mount) or
@@ -250,7 +279,29 @@ yields no candidates.
 Exit codes: 0 success, 1 runtime error, 2 usage error, 3 missing FFmpeg,
 4 partial failures (output written), 130 cancelled (partial output written).
 
-## 12. Code layout
+## 12. Measured environments and performance
+
+Real hardware: Linux amd64 (development machine) and a Synology DS218j
+(ARMv7, 512 MB, DSM, ext4) over SSH, exact mode only: DSM ships `ffmpeg`
+without `ffprobe`, so video mode, media workers and their memory were not
+measured there. macOS and Windows: CI only. 32-bit tests (`GOARCH=386`) run
+in CI but do not replace the ARMv7 measurements.
+
+DS218j, synthetic files, peak RSS from /proc (`scripts/nas-bench.sh`):
+
+| Case | Time | Peak RSS |
+|---|---|---|
+| 300 identical 64 KiB copies, scan, v0.1 before / after | 5.36 s / 1.88 s | 117 MiB / 14 MiB |
+| same, plan | 2.49 s / 0.23 s | 53 MiB / 8 MiB |
+| 3,000 identical copies, scan / plan | 15.9 s / 1.0 s | 31 MiB / 31 MiB |
+| 10,000 4 KiB files + 2,000 hard links + 2,000 symlinks, `--io-workers 1` / 4 | 39.1 s / 28.5 s | 79 MiB / 71 MiB |
+| 3,000 copies, cold / warm cache | 27.7 s / 22.5 s | 34 MiB / 33 MiB |
+
+A real 5.5 TiB library of 4,396 files without equal sizes scanned in 2.5 s
+(no file content read). SIGINT during a scan exits 130 with a cancelled
+result; no scanned file changed in any run.
+
+## 13. Code layout
 
 ```
 cmd/reelwarden        entry point, Ctrl-C handling
