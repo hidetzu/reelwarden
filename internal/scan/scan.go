@@ -1061,6 +1061,11 @@ func (w *walker) recordLink(e model.PathEntry, full, rel string, root rootInfo, 
 }
 
 func (w *walker) attachSymlinkRefs() {
+	// Entry ID -> position, so attaching n links is linear, not n x entries.
+	pos := make(map[string]int, len(w.inv.Entries))
+	for i := range w.inv.Entries {
+		pos[w.inv.Entries[i].ID] = i
+	}
 	for key, entryIDs := range w.symlinkRef {
 		targets := w.reported[key] // untrusted: the link may reach any of them
 		if idx, ok := w.byIdentity[key]; ok {
@@ -1069,14 +1074,14 @@ func (w *walker) attachSymlinkRefs() {
 		for _, idx := range targets {
 			pf := &w.inv.Files[idx]
 			for _, eid := range entryIDs {
-				for i := range w.inv.Entries {
-					if w.inv.Entries[i].ID == eid {
-						if w.inv.Entries[i].PhysicalFileID == "" {
-							w.inv.Entries[i].PhysicalFileID = pf.ID
-						}
-						pf.SymlinkRefs = append(pf.SymlinkRefs, w.inv.Entries[i].Path)
-					}
+				i, ok := pos[eid]
+				if !ok {
+					continue
 				}
+				if w.inv.Entries[i].PhysicalFileID == "" {
+					w.inv.Entries[i].PhysicalFileID = pf.ID
+				}
+				pf.SymlinkRefs = append(pf.SymlinkRefs, w.inv.Entries[i].Path)
 			}
 		}
 	}
