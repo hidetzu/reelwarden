@@ -25,13 +25,14 @@ func Evaluate(res *model.ScanResult, policy string) (*model.Evaluation, error) {
 		return nil, fmt.Errorf("unknown policy %q (use conservative or balanced)", policy)
 	}
 	ix := model.NewIndex(res)
+	vrep := match.VisualRepresentatives(res.Files, match.HashSets(res.Files))
 	mp := match.DefaultParams()
 	if res.Params.Match != nil {
 		mp = *res.Params.Match
 	}
 	ev := &model.Evaluation{Policy: policy, Groups: []model.GroupEvaluation{}}
 	for gi := range res.Groups {
-		ge := evaluateGroup(ix, &res.Groups[gi], policy, mp, res.Status != model.StatusComplete)
+		ge := evaluateGroup(ix, vrep, &res.Groups[gi], policy, mp, res.Status != model.StatusComplete)
 		ev.Groups = append(ev.Groups, ge)
 		s := &ev.Summary
 		s.Groups++
@@ -70,7 +71,7 @@ func (m *member) set(dec string, reasons ...string) {
 
 // incomplete is set for partial or cancelled scans: some links or files may
 // not have been seen, so no member is proposed.
-func evaluateGroup(ix *model.Index, g *model.DuplicateGroup, policy string, mp model.MatchParams, incomplete bool) model.GroupEvaluation {
+func evaluateGroup(ix *model.Index, vrep map[string]string, g *model.DuplicateGroup, policy string, mp model.MatchParams, incomplete bool) model.GroupEvaluation {
 	ge := model.GroupEvaluation{GroupID: g.ID, Relation: g.Relation}
 	ms := make([]*member, 0, len(g.Members))
 	for _, id := range g.Members {
@@ -129,7 +130,7 @@ func evaluateGroup(ix *model.Index, g *model.DuplicateGroup, policy string, mp m
 		if m.dec != "" {
 			continue
 		}
-		decideAgainstKeeper(ix, keeper, m, policy, mp, incomplete, &ge)
+		decideAgainstKeeper(ix, vrep, keeper, m, policy, mp, incomplete, &ge)
 	}
 	// If any member could not be ranked against the keeper because of a
 	// blocking difference, the keeper itself is not a safe recommendation.
@@ -153,6 +154,39 @@ func evaluateGroup(ix *model.Index, g *model.DuplicateGroup, policy string, mp m
 		}
 	}
 	return finish(ge, ms, keeper, ix)
+}
+
+// evidenceBetween returns the edge that relates keeper k and member m, and a
+// note when it is not a direct edge between them. Byte-identical sets are
+// stored as stars (each copy linked to the first), and visual comparison is
+// done once per set, so evidence may come through a byte-identical copy.
+// That is exact: a copy has the same bytes, hence the same picture. A
+// chain of visual similarities is never accepted (no_direct_evidence).
+func evidenceBetween(ix *model.Index, vrep map[string]string, k, m *model.PhysicalFile) (*model.MatchEdge, string) {
+	if e := ix.EdgeBetween(k.ID, m.ID); e != nil {
+		return e, ""
+	}
+	if k.Exact != nil && m.Exact != nil && k.Exact.SHA256 != "" && k.Exact.SHA256 == m.Exact.SHA256 &&
+		!k.ChangedDuringScan && !m.ChangedDuringScan {
+		for _, e := range ix.EdgesByFile[m.ID] {
+			if e.Relation == model.RelationByteIdentical {
+				return e, "same full SHA-256 as the keeper (one byte-identical set)"
+			}
+		}
+	}
+	rk, rm := k.ID, m.ID
+	if r, ok := vrep[rk]; ok {
+		rk = r
+	}
+	if r, ok := vrep[rm]; ok {
+		rm = r
+	}
+	if rk != k.ID || rm != m.ID {
+		if e := ix.EdgeBetween(rk, rm); e != nil {
+			return e, "compared through a byte-identical copy (" + rk + " ~ " + rm + ")"
+		}
+	}
+	return nil, ""
 }
 
 func hasPrefixReason(rs []string, p string) bool {
@@ -219,8 +253,11 @@ func keeperReasons(k *member, all []*member, exact bool) []string {
 
 // decideAgainstKeeper decides m against keeper k with the scan's match
 // parameters.
-func decideAgainstKeeper(ix *model.Index, k, m *member, policy string, mp model.MatchParams, incomplete bool, ge *model.GroupEvaluation) {
-	e := ix.EdgeBetween(k.f.ID, m.f.ID)
+func decideAgainstKeeper(ix *model.Index, vrep map[string]string, k, m *member, policy string, mp model.MatchParams, incomplete bool, ge *model.GroupEvaluation) {
+	e, via := evidenceBetween(ix, vrep, k.f, m.f)
+	if via != "" {
+		m.reasons = append(m.reasons, via)
+	}
 	if e == nil {
 		m.set(model.DecisionManualReview, "no_direct_evidence: this file was grouped through another member and was never matched directly against the keeper")
 		ge.ReviewReasons = appendUnique(ge.ReviewReasons, "no_direct_evidence")

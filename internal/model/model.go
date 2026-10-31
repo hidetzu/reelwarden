@@ -490,6 +490,7 @@ type Index struct {
 	Edges   map[string]*MatchEdge
 	// EdgesByFile maps a physical file ID to the edges touching it.
 	EdgesByFile map[string][]*MatchEdge
+	byPair      map[[2]string]*MatchEdge
 }
 
 // NewIndex builds an Index over r. The maps point into r's slices.
@@ -499,6 +500,7 @@ func NewIndex(r *ScanResult) *Index {
 		Entries:     make(map[string]*PathEntry, len(r.Entries)),
 		Edges:       make(map[string]*MatchEdge, len(r.Edges)),
 		EdgesByFile: make(map[string][]*MatchEdge),
+		byPair:      make(map[[2]string]*MatchEdge),
 	}
 	for i := range r.Files {
 		ix.Files[r.Files[i].ID] = &r.Files[i]
@@ -511,16 +513,21 @@ func NewIndex(r *ScanResult) *Index {
 		ix.Edges[e.ID] = e
 		ix.EdgesByFile[e.Left] = append(ix.EdgesByFile[e.Left], e)
 		ix.EdgesByFile[e.Right] = append(ix.EdgesByFile[e.Right], e)
+		if _, dup := ix.byPair[pair(e.Left, e.Right)]; !dup {
+			ix.byPair[pair(e.Left, e.Right)] = e
+		}
 	}
 	return ix
 }
 
 // EdgeBetween returns the direct edge between a and b, if any.
 func (ix *Index) EdgeBetween(a, b string) *MatchEdge {
-	for _, e := range ix.EdgesByFile[a] {
-		if o, ok := e.Other(a); ok && o == b {
-			return e
-		}
+	return ix.byPair[pair(a, b)]
+}
+
+func pair(a, b string) [2]string {
+	if a > b {
+		a, b = b, a
 	}
-	return nil
+	return [2]string{a, b}
 }

@@ -58,21 +58,19 @@ type Result struct {
 // carry Exact / Visual / Media fingerprints where available.
 func Build(files []model.PhysicalFile, p model.MatchParams, visual bool) Result {
 	var b edgeBuilder
-	exactPairs := buildExact(&b, files)
+	sets := HashSets(files)
+	buildExact(&b, files, sets)
 	if visual {
-		buildVisual(&b, files, p, exactPairs)
+		buildVisual(&b, files, p, VisualRepresentatives(files, sets))
 	}
 	return Result{Edges: b.edges, Groups: group(files, b.edges)}
 }
 
-func pairKey(a, b string) string {
-	if a > b {
-		a, b = b, a
-	}
-	return a + "|" + b
-}
-
-func buildExact(b *edgeBuilder, files []model.PhysicalFile) map[string]bool {
+// HashSets returns, for every full SHA-256 shared by two or more files that
+// did not change during the scan, the indexes of those files sorted by ID.
+// Equal SHA-256 is an equivalence relation, so a set needs no pairwise
+// evidence: every member is byte-identical to every other.
+func HashSets(files []model.PhysicalFile) map[string][]int {
 	byHash := map[string][]int{}
 	for i := range files {
 		f := &files[i]
@@ -81,32 +79,71 @@ func buildExact(b *edgeBuilder, files []model.PhysicalFile) map[string]bool {
 		}
 		byHash[f.Exact.SHA256] = append(byHash[f.Exact.SHA256], i)
 	}
-	hashes := make([]string, 0, len(byHash))
-	for h := range byHash {
+	for h, idx := range byHash {
+		if len(idx) < 2 {
+			delete(byHash, h)
+			continue
+		}
+		sort.Slice(idx, func(a, b int) bool { return files[idx[a]].ID < files[idx[b]].ID })
+	}
+	return byHash
+}
+
+// buildExact links every member of a byte-identical set to the set's first
+// member (by ID): n-1 edges instead of n(n-1)/2, with no evidence lost,
+// since each edge states the full SHA-256 the whole set shares.
+func buildExact(b *edgeBuilder, files []model.PhysicalFile, sets map[string][]int) {
+	hashes := make([]string, 0, len(sets))
+	for h := range sets {
 		hashes = append(hashes, h)
 	}
 	sort.Strings(hashes)
-	pairs := map[string]bool{}
 	for _, h := range hashes {
-		idx := byHash[h]
-		for x := 0; x < len(idx); x++ {
-			for y := x + 1; y < len(idx); y++ {
-				l, r := &files[idx[x]], &files[idx[y]]
-				ev := []string{
-					fmt.Sprintf("full SHA-256 equal (%s…)", h[:16]),
-					fmt.Sprintf("size equal (%d bytes)", l.Size),
-				}
-				if l.IdentityStatus == model.IdentityKnown && r.IdentityStatus == model.IdentityKnown {
-					ev = append(ev, "different physical files (identity differs)")
-				} else {
-					ev = append(ev, "file identity not confirmed: these may be the same physical file reached by different paths")
-				}
-				b.add(model.MatchEdge{Left: l.ID, Right: r.ID, Relation: model.RelationByteIdentical, Confidence: model.ConfidenceHigh, Evidence: ev})
-				pairs[pairKey(l.ID, r.ID)] = true
+		idx := sets[h]
+		head := &files[idx[0]]
+		for _, i := range idx[1:] {
+			f := &files[i]
+			ev := []string{
+				fmt.Sprintf("full SHA-256 equal (%s…)", h[:16]),
+				fmt.Sprintf("size equal (%d bytes)", f.Size),
 			}
+			if len(idx) > 2 {
+				ev = append(ev, fmt.Sprintf("one of %d byte-identical files with this SHA-256; each is linked to %s", len(idx), head.ID))
+			}
+			if f.IdentityStatus == model.IdentityKnown && head.IdentityStatus == model.IdentityKnown {
+				ev = append(ev, "different physical files (identity differs)")
+			} else {
+				ev = append(ev, "file identity not confirmed: these may be the same physical file reached by different paths")
+			}
+			b.add(model.MatchEdge{Left: head.ID, Right: f.ID, Relation: model.RelationByteIdentical, Confidence: model.ConfidenceHigh, Evidence: ev})
 		}
 	}
-	return pairs
+}
+
+// VisualRepresentatives maps every member of a byte-identical set to the one
+// member that takes part in visual comparison (the first by ID that has a
+// visual fingerprint and a known duration). Byte-identical files have the
+// same picture, so comparing one of them stands for all, and visual work
+// stays linear in the number of copies.
+func VisualRepresentatives(files []model.PhysicalFile, sets map[string][]int) map[string]string {
+	rep := map[string]string{}
+	for _, idx := range sets {
+		r := ""
+		for _, i := range idx {
+			f := &files[i]
+			if f.Visual != nil && f.Media != nil && f.Media.DurationKnown {
+				r = f.ID
+				break
+			}
+		}
+		if r == "" {
+			continue
+		}
+		for _, i := range idx {
+			rep[files[i].ID] = r
+		}
+	}
+	return rep
 }
 
 type vcand struct {
@@ -114,12 +151,15 @@ type vcand struct {
 	dur float64
 }
 
-func buildVisual(b *edgeBuilder, files []model.PhysicalFile, p model.MatchParams, skip map[string]bool) {
+func buildVisual(b *edgeBuilder, files []model.PhysicalFile, p model.MatchParams, rep map[string]string) {
 	var cs []vcand
 	for i := range files {
 		f := &files[i]
 		if f.Visual == nil || f.Media == nil || !f.Media.DurationKnown || f.ChangedDuringScan {
 			continue
+		}
+		if r, ok := rep[f.ID]; ok && r != f.ID {
+			continue // a byte-identical copy of r: r stands for it
 		}
 		cs = append(cs, vcand{idx: i, dur: f.Media.DurationSec})
 	}
@@ -136,7 +176,7 @@ func buildVisual(b *edgeBuilder, files []model.PhysicalFile, p model.MatchParams
 				break
 			}
 			l, r := &files[cs[i].idx], &files[cs[j].idx]
-			if skip[pairKey(l.ID, r.ID)] {
+			if l.Exact != nil && r.Exact != nil && l.Exact.SHA256 != "" && l.Exact.SHA256 == r.Exact.SHA256 {
 				continue
 			}
 			if e, ok := Compare(l, r, p); ok {
@@ -266,19 +306,23 @@ func group(files []model.PhysicalFile, edges []model.MatchEdge) []model.Duplicat
 		}
 	}
 	sort.Strings(roots)
+	// Edges per group, collected in one pass (not one pass per group).
+	byRoot := map[string][]*model.MatchEdge{}
+	for i := range edges {
+		e := &edges[i]
+		if e.Relation == model.RelationByteIdentical || e.Relation == model.RelationVisuallySimilar {
+			r := find(e.Left)
+			byRoot[r] = append(byRoot[r], e)
+		}
+	}
 	groups := make([]model.DuplicateGroup, 0, len(roots))
 	for i, r := range roots {
 		g := model.DuplicateGroup{ID: fmt.Sprintf("g%04d", i+1), Members: members[r]}
 		sort.Strings(g.Members)
 		rels := map[string]bool{}
-		for _, e := range edges {
-			if e.Relation != model.RelationByteIdentical && e.Relation != model.RelationVisuallySimilar {
-				continue
-			}
-			if find(e.Left) == r {
-				g.Edges = append(g.Edges, e.ID)
-				rels[e.Relation] = true
-			}
+		for _, e := range byRoot[r] {
+			g.Edges = append(g.Edges, e.ID)
+			rels[e.Relation] = true
 		}
 		switch {
 		case len(rels) > 1:

@@ -1,10 +1,12 @@
 package decision
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hidetzu/reelwarden/internal/match"
 	"github.com/hidetzu/reelwarden/internal/model"
 )
 
@@ -461,5 +463,65 @@ func TestCandidateNeedsProtectedKeeper(t *testing.T) {
 	_, d = eval(t, r, model.PolicyConservative)
 	if d["f2"].Decision != model.DecisionRedundantCandidate {
 		t.Fatalf("protected keeper: %+v", d["f2"])
+	}
+}
+
+// 10,000 copies of one video, one of them in the protected library: every
+// other copy is a candidate, and evaluation and plan stay linear.
+func TestManyIdenticalCopiesScale(t *testing.T) {
+	const n = 10000
+	files := make([]model.PhysicalFile, n)
+	for i := range files {
+		files[i] = pf(fmt.Sprintf("f%06d", i+1), 1<<20)
+		files[i].Identity = &model.FileIdentity{Device: 1, Inode: uint64(i + 1)}
+		files[i].Exact = &model.ExactFingerprint{SHA256: "0123456789abcdef0123456789abcdef"}
+	}
+	protected(&files[n/2])
+	m := match.Build(files, match.DefaultParams(), false)
+	if len(m.Edges) != n-1 || len(m.Groups) != 1 {
+		t.Fatalf("edges %d, groups %d", len(m.Edges), len(m.Groups))
+	}
+	r := &model.ScanResult{Status: model.StatusComplete, Files: files, Edges: m.Edges, Groups: m.Groups}
+	ev, err := Evaluate(r, model.PolicyConservative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := ev.Groups[0]
+	if g.Keeper != files[n/2].ID || ev.Summary.RedundantCandidates != n-1 {
+		t.Fatalf("keeper %s, candidates %d", g.Keeper, ev.Summary.RedundantCandidates)
+	}
+	if len(g.Evidence) != n-1 {
+		t.Fatalf("evidence lines %d, want %d (one per edge)", len(g.Evidence), n-1)
+	}
+	p := BuildPlan(r, ev, "scan.json", model.ToolInfo{})
+	if len(p.Groups[0].Actions) != n-1 {
+		t.Fatalf("plan actions %d", len(p.Groups[0].Actions))
+	}
+}
+
+// A and B are byte-identical; only A was compared visually with the
+// protected keeper K. B may rely on A's comparison (same bytes, same
+// picture), but D, similar to A only, must not rely on a chain.
+func TestEvidenceThroughByteIdenticalCopyButNotChains(t *testing.T) {
+	k := pf("fK", 3000, video(1920, 1080, "h264", 8e6, 1, 0), protected)
+	a := pf("fA", 1000, video(1280, 720, "h264", 2e6, 1, 0))
+	b := pf("fB", 1000, video(1280, 720, "h264", 2e6, 1, 0))
+	d := pf("fD", 900, video(1280, 720, "h264", 1.9e6, 1, 0))
+	a.Exact = &model.ExactFingerprint{SHA256: "aaaa"}
+	b.Exact = &model.ExactFingerprint{SHA256: "aaaa"}
+	d.Exact = &model.ExactFingerprint{SHA256: "dddd"}
+	k.Exact = &model.ExactFingerprint{SHA256: "kkkk"}
+	r := scanOf(model.RelationMixed, []model.PhysicalFile{k, a, b, d},
+		[][2]string{{"fA", "fB"}, {"fA", "fK"}, {"fA", "fD"}},
+		model.RelationByteIdentical, model.RelationVisuallySimilar, model.RelationVisuallySimilar)
+	_, dec := eval(t, r, model.PolicyBalanced)
+	if dec["fA"].Decision != model.DecisionRedundantCandidate {
+		t.Fatalf("A: %+v", dec["fA"])
+	}
+	if dec["fB"].Decision != model.DecisionRedundantCandidate || !hasReason(dec["fB"], "byte-identical copy") {
+		t.Fatalf("B should use A's comparison: %+v", dec["fB"])
+	}
+	if dec["fD"].Decision != model.DecisionManualReview || !hasReason(dec["fD"], "no_direct_evidence") {
+		t.Fatalf("D must not rely on a chain: %+v", dec["fD"])
 	}
 }
