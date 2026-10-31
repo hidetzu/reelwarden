@@ -1,0 +1,33 @@
+name: Release
+
+# Runs only when a version tag is pushed. Tags are created manually after
+# explicit approval; nothing in this repository creates them automatically.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          # go.mod states the minimum (1.26.0); build with the latest patch.
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Test
+        run: go test -count=1 ./...
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

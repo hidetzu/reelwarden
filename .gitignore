@@ -1,0 +1,18 @@
+# Binaries
+/reelwarden
+/reelwarden.exe
+/dist/
+/bin/
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Local scratch (private notes, never committed)
+/tmp/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

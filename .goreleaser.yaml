@@ -1,0 +1,62 @@
+version: 2
+
+project_name: reelwarden
+
+builds:
+  - id: reelwarden
+    main: ./cmd/reelwarden
+    binary: reelwarden
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/hidetzu/reelwarden/internal/version.Version={{ .Tag }}
+      - -X github.com/hidetzu/reelwarden/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/hidetzu/reelwarden/internal/version.Date={{ .Date }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64, arm]
+    # 32-bit ARMv7 for low-end NAS (e.g. Synology DS218j); Linux only.
+    goarm: ["7"]
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - LICENSE
+      - THIRD_PARTY_LICENSES.txt
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^(docs|test|chore|ci|style)(\\(.*\\))?:"
+      - "^Merge "
+      - "^build\\(deps\\)"
+
+release:
+  draft: true
+  prerelease: auto
+  footer: |
+    reelwarden does not bundle FFmpeg. Install ffmpeg/ffprobe separately for `--mode video`.
+    Verify downloads with `checksums.txt` (SHA-256).

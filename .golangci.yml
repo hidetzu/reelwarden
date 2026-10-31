@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G204 # subprocess with variable args: ffmpeg/ffprobe paths are user-chosen and passed as argv, never via a shell
+        - G304 # file inclusion via variable: reading user-selected files is the purpose of the tool
+        - G115 # integer conversions of OS identity fields are intentional
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck, gosec]
+formatters:
+  enable:
+    - gofmt
