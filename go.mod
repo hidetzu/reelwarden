@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/spf13/cobra v1.10.2
 	go.etcd.io/bbolt v1.5.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.43.0
 )
 
